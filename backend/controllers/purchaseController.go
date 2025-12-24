@@ -8,29 +8,37 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// Struct untuk menampung JSON request dari frontend
-type CreatePurchaseRequest struct {
-	SupplierID uint `json:"supplier_id"`
-	Items      []struct {
-		ItemID uint `json:"item_id"`
-		Qty    int  `json:"qty"`
-	} `json:"items"`
+type PurchaseItemRequest struct {
+	ItemID uint `json:"item_id" validate:"required,gt=0"` // ID harus ada
+	Qty    int  `json:"qty" validate:"required,min=1"`    // Qty minimal 1
 }
 
-func CreatePurchase(c *fiber.Ctx) error {
-	// 1. Ambil User ID dari Token (disimpan di Locals oleh Middleware)
-	userID := c.Locals("user_id").(uint)
+type CreatePurchaseRequest struct {
+	SupplierID uint                  `json:"supplier_id" validate:"required,gt=0"`
+	Items      []PurchaseItemRequest `json:"items" validate:"required,min=1,dive"` // Minimal beli 1 barang
+}
 
-	// 2. Parse Request Body
+// --- CONTROLLER ---
+
+func CreatePurchase(c *fiber.Ctx) error {
+	userID := c.Locals("user_id").(uint) // Ambil dari Middleware
+
+	// 1. Parsing Input
 	req := new(CreatePurchaseRequest)
 	if err := c.BodyParser(req); err != nil {
-		return c.Status(400).JSON(fiber.Map{"message": "Invalid Data"})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid JSON format"})
 	}
 
-	// === MEMULAI DATABASE TRANSACTION ===
-	tx := database.DB.Begin()
+	// 2. Validation (Clean Code & Security)
+	if err := Validate.Struct(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"message": "Validation failed",
+			"errors":  err.Error(),
+		})
+	}
 
-	// Error handling panic recovery (jika ada crash di tengah transaksi)
+	// 3. Begin Transaction (ACID)
+	tx := database.DB.Begin()
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
@@ -40,53 +48,53 @@ func CreatePurchase(c *fiber.Ctx) error {
 	var grandTotal int64 = 0
 	var details []models.PurchasingDetail
 
-	// 3. Loop items untuk hitung harga SERVER-SIDE
+	// 4. Logic Processing
 	for _, itemReq := range req.Items {
 		var item models.Item
-		// Kunci row database agar tidak ada race condition
+
+		// Lock Row (Concurrency Control)
 		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&item, itemReq.ItemID).Error; err != nil {
 			tx.Rollback()
-			return c.Status(404).JSON(fiber.Map{"message": "Item tidak ditemukan"})
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"message": "Item not found or unavailable"})
 		}
 
-		// Hitung Subtotal
+		// Hitung Subtotal (Server Side Calculation - WAJIB)
 		subTotal := int64(itemReq.Qty) * item.Price
 		grandTotal += subTotal
 
-		// Tambah Detail ke memory slice
 		details = append(details, models.PurchasingDetail{
 			ItemID:   item.ID,
 			Qty:      itemReq.Qty,
 			SubTotal: subTotal,
 		})
 
-		// 4. Update Stock Item
+		// Update Stock
 		item.Stock += itemReq.Qty
 		if err := tx.Save(&item).Error; err != nil {
 			tx.Rollback()
-			return c.Status(500).JSON(fiber.Map{"message": "Gagal update stock"})
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to update stock"})
 		}
 	}
 
-	// 5. Buat Header Transaksi
+	// 5. Create Header
 	purchase := models.Purchasing{
 		Date:       time.Now(),
 		SupplierID: req.SupplierID,
 		UserID:     userID,
 		GrandTotal: grandTotal,
-		Details:    details, // GORM akan otomatis insert details juga karena relasi HasMany
+		Details:    details,
 	}
 
 	if err := tx.Create(&purchase).Error; err != nil {
 		tx.Rollback()
-		return c.Status(500).JSON(fiber.Map{"message": "Gagal simpan transaksi"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Failed to create transaction"})
 	}
 
-	// === COMMIT TRANSAKSI (Jika semua lancar, simpan permanen) ===
+	// Commit Transaction
 	tx.Commit()
 
-	return c.JSON(fiber.Map{
-		"message": "Transaksi Sukses",
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "Transaction created successfully",
 		"data":    purchase,
 	})
 }

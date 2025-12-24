@@ -2,34 +2,51 @@ package middleware
 
 import (
 	"os"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 func IsAuthenticated(c *fiber.Ctx) error {
-	cookie := c.Cookies("jwt")
-	if cookie == "" {
-		return c.Status(401).JSON(fiber.Map{"message": "Unauthenticated"})
+	var tokenString string
+
+	authHeader := c.Get("Authorization")
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+	} else {
+		tokenString = c.Cookies("jwt")
 	}
 
-	SecretKey := os.Getenv("JWT_SECRET")
-	if SecretKey == "" {
-		return c.Status(500).JSON(fiber.Map{"message": "JWT secret not configured"})
+	if tokenString == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"message": "Unauthorized access",
+		})
 	}
 
-	token, err := jwt.ParseWithClaims(cookie, &jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(SecretKey), nil
+	secretKey := os.Getenv("JWT_SECRET")
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fiber.ErrUnauthorized
+		}
+		return []byte(secretKey), nil
 	})
 
 	if err != nil || !token.Valid {
-		return c.Status(401).JSON(fiber.Map{"message": "Unauthenticated"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"message": "Invalid or expired token",
+		})
 	}
 
-	claims := token.Claims.(*jwt.MapClaims)
-	id := uint((*claims)["iss"].(float64))
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+			"message": "Invalid token claims",
+		})
+	}
 
-	c.Locals("user_id", id)
+	c.Locals("user_id", uint(claims["iss"].(float64)))
+	c.Locals("user_role", claims["role"].(string))
 
 	return c.Next()
 }

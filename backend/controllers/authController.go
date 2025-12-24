@@ -11,73 +11,104 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Init Validator
+
+type RegisterInput struct {
+	Username string `json:"username" validate:"required,min=4,alphanum"`
+	Password string `json:"password" validate:"required,min=6"`
+}
+
+type LoginInput struct {
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required"`
+}
+
 func Register(c *fiber.Ctx) error {
-	var data map[string]string
-	if err := c.BodyParser(&data); err != nil {
-		return err
+	input := new(RegisterInput)
+	if err := c.BodyParser(input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid JSON format"})
+	}
+	if err := Validate.Struct(input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"message": "Validation failed",
+			"errors":  err.Error(),
+		})
 	}
 
-	password, _ := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Could not hash password"})
+	}
+
 	user := models.User{
-		Username: data["username"],
-		Password: string(password),
-		Role:     "staff", // Default
+		Username: input.Username,
+		Password: string(hashedPassword),
+		Role:     "staff", // Default role
 	}
 
 	if err := database.DB.Create(&user).Error; err != nil {
-		return c.Status(400).JSON(fiber.Map{"message": "Gagal register, username mungkin duplikat"})
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"message": "Username already exists"})
 	}
-	return c.JSON(user)
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "User registered successfully",
+		"user": fiber.Map{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+		},
+	})
 }
 
 func Login(c *fiber.Ctx) error {
-	var data map[string]string
-	if err := c.BodyParser(&data); err != nil {
-		return err
+	// 1. Parsing Input
+	input := new(LoginInput)
+	if err := c.BodyParser(input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": "Invalid JSON format"})
 	}
 
+	// 2. Validation
+	if err := Validate.Struct(input); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"errors": err.Error()})
+	}
+
+	// 3. Cari User
 	var user models.User
-	// Cari user berdasarkan username
-	database.DB.Where("username = ?", data["username"]).First(&user)
+	database.DB.Where("username = ?", input.Username).First(&user)
 
 	if user.ID == 0 {
-		return c.Status(404).JSON(fiber.Map{"message": "User not found"})
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid credentials"})
 	}
 
-	// Cek Password
-	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data["password"])); err != nil {
-		return c.Status(400).JSON(fiber.Map{"message": "Incorrect password"})
+	// 4. Cek Password
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password)); err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"message": "Invalid credentials"})
 	}
 
-	// 1. Ambil Secret Key
+	// 5. Generate JWT
 	secretKey := os.Getenv("JWT_SECRET")
 	if secretKey == "" {
-		// Safety check: Beritahu jika .env belum terbaca
-		return c.Status(500).JSON(fiber.Map{
-			"message": "Server Error: JWT_SECRET is missing in .env",
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Server configuration error"})
 	}
 
-	// 2. Buat Claims
 	claims := jwt.MapClaims{
-		"iss": user.ID,
-		"exp": time.Now().Add(time.Hour * 24).Unix(), // Expire 1 hari
+		"iss":  user.ID,
+		"role": user.Role,
+		"exp":  time.Now().Add(time.Hour * 24).Unix(),
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-	// 3. Generate Token String (JANGAN pakai tanda _ )
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	t, err := token.SignedString([]byte(secretKey))
 	if err != nil {
-		// Jika gagal, return error agar kita tahu kenapa
-		return c.Status(500).JSON(fiber.Map{
-			"message": "Could not generate token",
-			"error":   err.Error(),
-		})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"message": "Could not login"})
 	}
 
-	// Jika sukses, kirim token
 	return c.JSON(fiber.Map{
 		"token": t,
-		"user":  user,
+		"user": fiber.Map{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+		},
 	})
 }
