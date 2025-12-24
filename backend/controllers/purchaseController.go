@@ -5,6 +5,10 @@ import (
 	"procurement-system/models"
 	"time"
 
+	"bytes"
+	"encoding/json"
+	"net/http"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -93,8 +97,30 @@ func CreatePurchase(c *fiber.Ctx) error {
 	// Commit Transaction
 	tx.Commit()
 
+	//Kirim Webhook (Non-blocking / Async via Goroutine)
+	go sendWebhook(purchase)
+
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"message": "Transaction created successfully",
 		"data":    purchase,
 	})
+}
+
+// --- WEBHOOK HELPER ---
+func sendWebhook(purchase models.Purchasing) {
+	// 1. URL Dummy (Bisa pakai webhook.site untuk tes nyata, atau placeholder saja)
+	url := "https://webhook.site/uuid-anda-disini" // Ganti jika ingin tes live, biarkan jika demo code
+
+	// 2. Siapkan Payload JSON
+	payload, _ := json.Marshal(map[string]interface{}{
+		"event":       "PURCHASE_CREATED",
+		"purchase_id": purchase.ID,
+		"total":       purchase.GrandTotal,
+		"date":        purchase.Date,
+		"items_count": len(purchase.Details),
+	})
+
+	// 3. Kirim Request (Background)
+	// Kita abaikan error karena ini hanya notifikasi fire-and-forget
+	http.Post(url, "application/json", bytes.NewBuffer(payload))
 }
