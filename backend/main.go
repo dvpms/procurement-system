@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	"procurement-system/database"
 	"procurement-system/routes"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 func main() {
@@ -12,10 +13,9 @@ func main() {
 
 	app := fiber.New()
 
-	// CORS agar Frontend jQuery bisa akses
 	app.Use(cors.New(cors.Config{
-		AllowCredentials: true,
-		AllowOrigins:     "http://localhost:5500", // Sesuaikan port frontend nanti
+		AllowOrigins: "*", // Boleh semua origin
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
 	}))
 
 	routes.Setup(app)
