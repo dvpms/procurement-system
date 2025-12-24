@@ -1,7 +1,7 @@
 const BASE_URL = "http://localhost:3000/api";
 
 const API = {
-    // Fungsi login khusus (public)
+    // Fungsi login k
     login: function(username, password) {
         return $.ajax({
             url: `${BASE_URL}/login`,
@@ -11,7 +11,6 @@ const API = {
         });
     },
 
-    // Wrapper untuk request yang butuh Token
     request: function(endpoint, method = "GET", data = null) {
         const token = localStorage.getItem("token"); // Ambil token
         
@@ -29,7 +28,7 @@ const API = {
         }
 
         return $.ajax(config).fail((jqXHR) => {
-            // Global Error Handling (Jika token expired/401, tendang ke login)
+            // Error Handling (Jika token expired/401, direct ke login)
             if (jqXHR.status === 401) {
                 Swal.fire("Sesi Habis", "Silakan login kembali", "warning").then(() => {
                     logout();
