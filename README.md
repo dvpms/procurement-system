@@ -42,7 +42,7 @@ CREATE DATABASE procurement_db;
 
 ### 2. Konfigurasi Environment
 
-Buat file `.env` di root folder, lalu isi konfigurasi berikut:
+Buat file `.env` di folder backend, lalu isi konfigurasi berikut:
 
 ```env
 DB_USER=root
